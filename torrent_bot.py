@@ -14,6 +14,7 @@ client = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 selected_files = {}
 files = []
+torrent_file_id = None
 
 
 @client.on_message(filters.command("start"))
@@ -23,6 +24,7 @@ async def start(_, message):
 
 @client.on_message(filters.document)
 async def handle_document(_, message):
+    global torrent_file_id
     if message.document.file_name.endswith(".torrent"):
         torrent_file = await message.download(file_name="downloads/")
         torrent = Torrent.from_file(torrent_file)
@@ -32,6 +34,8 @@ async def handle_document(_, message):
             *[[InlineKeyboardButton(f"{i + 1}. {file.name}", callback_data=f"{i}")] for i, file in enumerate(torrent.files)],
             [InlineKeyboardButton("Download", callback_data="download")]
         ])
+
+        torrent_file_id = message.document.file_id
 
         await message.reply(f"Torrent info:\n\n"
                             f"Name: {torrent.name}\n"
@@ -63,9 +67,9 @@ async def handle_callback_query(client: Client, query: CallbackQuery):
 
 
 async def download_torrent(query: CallbackQuery):
+    global torrent_file_id
     message = query.message
-    torrent_file = message.reply_to_message.document.file_id
-    torrent_file_path = await client.download_media(torrent_file)
+    torrent_file_path = await client.download_media(torrent_file_id)
 
     ses = lt.session()
     with open(torrent_file_path, "rb") as f:
