@@ -78,7 +78,7 @@ async def download_torrent(query: CallbackQuery):
     params = {
         "save_path": DOWNLOAD_DIR,
         "ti": info,
-        "flags": lt.torrent_flags.flag_auto_managed,
+        "flags": lt.torrent_flags.auto_managed,
     }
 
     handle = ses.add_torrent(params)
