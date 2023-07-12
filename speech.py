@@ -4,18 +4,16 @@ import speech_recognition as sr
 from telegram import Update, Voice
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
-# توکن ربات تلگرام شما
 TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 
 def start(update: Update, context: CallbackContext):
-    update.message.reply_text('لطفاً ویس خود را ارسال کنید.')
+    update.message.reply_text('Please send your voice message.')
 
 def voice_to_text(update: Update, context: CallbackContext):
     voice: Voice = update.message.voice
     file = context.bot.get_file(voice.file_id)
     file.download('voice.ogg')
 
-    # تبدیل فایل صوتی به فرمت مورد نیاز CMU Sphinx
     ogg_audio = AudioSegment.from_ogg('voice.ogg')
     ogg_audio.export('voice.wav', format='wav')
 
@@ -27,7 +25,7 @@ def voice_to_text(update: Update, context: CallbackContext):
         recognized_text = r.recognize_sphinx(audio, language='fa')
         update.message.reply_text(recognized_text)
     except sr.UnknownValueError:
-        update.message.reply_text("متاسفانه نتوانستم صدا را شناسایی کنم.")
+        update.message.reply_text("Unfortunately, I couldn't recognize the speech.")
 
 def main():
     updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
@@ -40,4 +38,4 @@ def main():
     updater.idle()
 
 if __name__ == '__main__':
-    main()￼Enter
+    main()
