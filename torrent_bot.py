@@ -1,100 +1,97 @@
 import os
-import tempfile
-import libtorrent as lt
-import asyncio
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from torrentool.api import Torrent
 
-API_ID = 12345  # Replace with your API ID
-API_HASH = 'YOUR_API_HASH'
-SESSION_STRING = 'YOUR_SESSION_STRING'
-TELEGRAM_APP_NAME = 'your_app_name'  # Replace with your app name
-TELEGRAM_API_TOKEN = 'YOUR_TELEGRAM_API_TOKEN'  # Replace with your Telegram API token
+API_ID = "20307429"
+API_HASH = 'db1b2a38958c06bc4e99b01d4cfd485d'
+SESSION_STRING = '...'
+TELEGRAM_APP_NAME = 'Remote'
+TELEGRAM_API_TOKEN = '6213454948:AAG1Sv1lyiOYqkOnR0KpYSbfnjRsyKwk8pl'
 DOWNLOAD_DIR = 'downloads'
 
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-client.start()
+client = Client("my_account", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
+selected_files = {}
 
-app = Client(TELEGRAM_APP_NAME, API_ID, API_HASH, bot_token=TELEGRAM_API_TOKEN)
-
-if not os.path.exists(DOWNLOAD_DIR):
-    os.makedirs(DOWNLOAD_DIR)
+files = []
 
 
-@app.on_message(filters.command("start"))
-async def start(client, message):
-    await message.reply_text("Please send me a torrent file.")
+@client.on_message(filters.command("start"))
+async def start(_, message):
+    await message.reply("Send me a torrent file and I'll help you download it.")
 
 
-@app.on_message(filters.document)
-async def handle_torrent(client, message):
-    if message.document.mime_type != "application/x-bittorrent":
+@client.on_message(filters.document)
+async def handle_torrent(_, message):
+    global files
+    file = await message.download(file_name="temp.torrent")
+    torrent = Torrent.from_file(file)
+    os.remove("temp.torrent")
+
+    files = torrent.files
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                f"{i}: {file.path}", callback_data=f"file_selection_{i}"
+            )
+            for i, file in enumerate(files)
+        ],
+        [
+            InlineKeyboardButton("Select All", callback_data="select_all"),
+            InlineKeyboardButton("Deselect All", callback_data="deselect_all"),
+        ],
+        [InlineKeyboardButton("Start Download", callback_data="start_download")],
+    ]
+
+    text = "Select the files you want to download by clicking on them:"
+    await message.reply(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@client.on_callback_query(filters.regex("^(file_selection|select_all|deselect_all)"))
+async def handle_file_selection(_, callback_query: CallbackQuery):
+    data = callback_query.data
+    message_id = callback_query.message.message_id
+
+    if message_id not in selected_files:
+        selected_files[message_id] = []
+
+    if data.startswith("file_selection"):
+        file_index = int(data.split("_")[-1])
+
+        if file_index in selected_files[message_id]:
+            selected_files[message_id].remove(file_index)
+        else:
+            selected_files[message_id].append(file_index)
+    elif data == "select_all":
+        selected_files[message_id] = list(range(len(files)))
+    elif data == "deselect_all":
+        selected_files[message_id] = []
+
+    text = "Select the files you want to download by clicking on them:"
+    await callback_query.message.edit(text=text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+    await callback_query.answer()
+
+
+@client.on_callback_query(filters.regex("^start_download"))
+async def handle_download_start(_, callback_query: CallbackQuery):
+    message_id = callback_query.message.message_id
+
+    if message_id not in selected_files or not selected_files[message_id]:
+        await callback_query.answer("No files selected!", show_alert=True)
         return
 
-    torrent_file_path = os.path.join(DOWNLOAD_DIR, message.document.file_name)
-    await message.download(file_name=torrent_file_path)
+    await callback_query.answer("Downloading...")
 
-    ses = lt.session()
-    info = lt.torrent_info(torrent_file_path)
-    h = ses.add_torrent({'ti': info, 'save_path': DOWNLOAD_DIR})
-    files = info.files()
+    # Download the selected files
+    for file_index in selected_files[message_id]:
+        file = files[file_index]
+        await file.download(DOWNLOAD_DIR)
 
-    keyboard = [InlineKeyboardButton(f"{i}: {file.path}", callback_data=f"{i}") for i, file in enumerate(files)]
-    reply_markup = InlineKeyboardMarkup([keyboard])
+    del selected_files[message_id]
 
-    await message.reply_text("Select the files you want to download:", reply_markup=reply_markup)
-
-    message.__setattr__('torrent_handle', h)
-    message.__setattr__('selected_files', set())
+    await callback_query.message.edit("Download complete!")
 
 
-@app.on_callback_query()
-async def handle_file_selection(client, callback_query):
-    file_index = int(callback_query.data)
-
-    if file_index in callback_query.message.selected_files:
-        callback_query.message.selected_files.remove(file_index)
-        text = "File deselected."
-    else:
-        callback_query.message.selected_files.add(file_index)
-        text = "File selected."
-
-    await callback_query.answer(text=text)
-
-
-@app.on_message(filters.command("download"))
-async def download_selected(client, message):
-    selected_files = message.selected_files
-    torrent_handle = message.torrent_handle
-
-    if not selected_files or not torrent_handle:
-        await message.reply_text("No files selected.")
-        return
-
-    torrent_handle.set_priority([1 if i in selected_files else 0 for i in range(torrent_handle.torrent_file().num_files())])
-
-    await message.reply_text("Downloading files...")
-    while not torrent_handle.is_seed():
-        status = torrent_handle.status()
-        progress = int(status.progress * 100)
-        await message.reply_text(f"Download progress: {progress}%")
-        await asyncio.sleep(5)
-
-    await message.reply_text("Download complete. Uploading files...")
-
-    for file_index in selected_files:
-        file_path = torrent_handle.torrent_file().files()[file_index].path
-        file_size = os.path.getsize(file_path)
-
-        with open(file_path, 'rb') as file:
-            if file_size > 2000000:
-                await client.send_document(message.chat.id, document=file)
-            else:
-                await client.send_document(message.chat.id, document=InputMediaDocument(media=file))
-
-    await message.reply_text("Upload complete.")
-
-
-app.run()
+client.run()
