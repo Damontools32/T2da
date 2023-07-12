@@ -1,18 +1,25 @@
 import os
 from pydub import AudioSegment
 import speech_recognition as sr
-from telegram import Update, Voice
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.types import ParseMode
+from aiogram.utils import executor
 
 TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+dp = Dispatcher(bot)
+dp.middleware.setup(LoggingMiddleware())
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text('Please send your voice message.')
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message):
+    await message.reply('Please send your voice message.')
 
-def voice_to_text(update: Update, context: CallbackContext):
-    voice: Voice = update.message.voice
-    file = context.bot.get_file(voice.file_id)
-    file.download('voice.ogg')
+@dp.message_handler(content_types=['voice'])
+async def voice_to_text(message: types.Message):
+    voice = message.voice
+    file_path = await bot.get_file(voice.file_id)
+    await bot.download_file(file_path.file_path, 'voice.ogg')
 
     ogg_audio = AudioSegment.from_ogg('voice.ogg')
     ogg_audio.export('voice.wav', format='wav')
@@ -23,19 +30,10 @@ def voice_to_text(update: Update, context: CallbackContext):
 
     try:
         recognized_text = r.recognize_sphinx(audio, language='fa')
-        update.message.reply_text(recognized_text)
+        await message.reply(recognized_text)
     except sr.UnknownValueError:
-        update.message.reply_text("Unfortunately, I couldn't recognize the speech.")
-
-def main():
-    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.voice, voice_to_text))
-
-    updater.start_polling()
-    updater.idle()
+        await message.reply("Unfortunately, I couldn't recognize the speech.")
 
 if __name__ == '__main__':
-    main()
+    from aiogram import executor
+    executor.start_polling(dp, skip_updates=True)
