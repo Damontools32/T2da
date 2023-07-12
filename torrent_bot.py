@@ -86,9 +86,19 @@ async def download_torrent(query: CallbackQuery):
     for index, _ in enumerate(info.files()):
         handle.file_priority(index, 0 if index not in selected_files else 1)
 
-    while not handle.is_seed():
+    last_progress = None
+    while True:
         s = handle.status()
-        await message.edit_text(f"Downloading: {s.progress * 100:.2f}% - {s.download_rate / 1000:.2f} kB/s")
+        is_seed = (s.state == lt.torrent_status.seeding)  # Check if seeding instead of using is_seed()
+        progress = s.progress * 100
+
+        if not is_seed and progress != last_progress:
+            await message.edit_text(f"Downloading: {progress:.2f}% - {s.download_rate / 1000:.2f} kB/s")
+            last_progress = progress
+
+        if is_seed:
+            break
+
         await asyncio.sleep(1)
 
     await message.edit_text("Download complete! Now sending the files...")
