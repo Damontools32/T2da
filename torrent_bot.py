@@ -1,4 +1,6 @@
 import os
+import asyncio
+import libtorrent as lt
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from torrentool.api import Torrent
@@ -24,13 +26,13 @@ async def handle_document(_, message):
     if message.document.file_name.endswith(".torrent"):
         torrent_file = await message.download(file_name="downloads/")
         torrent = Torrent.from_file(torrent_file)
-        
+
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton("Select All", callback_data="select_all")],
-            *[[InlineKeyboardButton(f"{i+1}. {file.name}", callback_data=f"{i}")] for i, file in enumerate(torrent.files)],
+            *[[InlineKeyboardButton(f"{i + 1}. {file.name}", callback_data=f"{i}")] for i, file in enumerate(torrent.files)],
             [InlineKeyboardButton("Download", callback_data="download")]
         ])
-        
+
         await message.reply(f"Torrent info:\n\n"
                             f"Name: {torrent.name}\n"
                             f"Size: {torrent.total_size} bytes\n\n"
@@ -43,21 +45,58 @@ async def handle_document(_, message):
 @client.on_callback_query()
 async def handle_callback_query(client: Client, query: CallbackQuery):
     index = query.data
-    
+
     if index == "select_all":
         for i, _ in enumerate(files):
             selected_files[i] = True
     elif index == "download":
-        # TODO: Add your download logic here
-        pass
+        # Download selected torrent files
+        await download_torrent(query)
     else:
         index = int(index)
         if index in selected_files:
             del selected_files[index]
         else:
             selected_files[index] = True
-    
+
     await query.answer()
 
+
+async def download_torrent(query: CallbackQuery):
+    message = query.message
+    torrent_file = message.reply_to_message.document.file_id
+    torrent_file_path = await client.download_media(torrent_file)
+
+    ses = lt.session()
+    with open(torrent_file_path, "rb") as f:
+        info = lt.torrent_info(lt.bdecode(f.read()))
+
+    params = {
+        "save_path": DOWNLOAD_DIR,
+        "ti": info,
+        "flags": lt.torrent_flags.flag_auto_managed,
+    }
+
+    handle = ses.add_torrent(params)
+
+    for index, _ in enumerate(info.files()):
+        handle.file_priority(index, 0 if index not in selected_files else 1)
+
+    while not handle.is_seed():
+        s = handle.status()
+        await message.edit_text(f"Downloading: {s.progress * 100:.2f}% - {s.download_rate / 1000:.2f} kB/s")
+        await asyncio.sleep(1)
+
+    await message.edit_text("Download complete! Now sending the files...")
+
+    for index in selected_files:
+        file_path = os.path.join(DOWNLOAD_DIR, info.files()[index].path)
+        await message.reply_document(file_path)
+
+    await message.edit_text("All files have been sent, the download folder will be cleared.")
+    for index in selected_files:
+        file_path = os.path.join(DOWNLOAD_DIR, info.files()[index].path)
+        os.remove(file_path)
+    os.remove(torrent_file_path)
 
 client.run()
