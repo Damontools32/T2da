@@ -1,15 +1,19 @@
+import json
 import os
 from pydub import AudioSegment
-import speech_recognition as sr
+from vosk import Model, KaldiRecognizer
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.types import ParseMode
 from aiogram.utils import executor
 
 TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher(bot)
 dp.middleware.setup(LoggingMiddleware())
+
+model = Model("model-fa")
 
 @dp.message_handler(commands=['start'])
 async def start(message: types.Message):
@@ -24,15 +28,17 @@ async def voice_to_text(message: types.Message):
     ogg_audio = AudioSegment.from_ogg('voice.ogg')
     ogg_audio.export('voice.wav', format='wav')
 
-    r = sr.Recognizer()
-    with sr.AudioFile('voice.wav') as source:
-        audio = r.record(source)
+    recognizer = KaldiRecognizer(model, 16000)
 
-    try:
-        recognized_text = r.recognize_sphinx(audio, language='fa')
-        await message.reply(recognized_text)
-    except sr.UnknownValueError:
-        await message.reply("Unfortunately, I couldn't recognize the speech.")
+    with open('voice.wav', 'rb') as audio_file:
+        while True:
+            data = audio_file.read(4000)
+            if len(data) == 0:
+                break
+            if recognizer.AcceptWaveform(data):
+                result = json.loads(recognizer.Result())
+                recognized_text = result.get('text', '')
+                await message.reply(recognized_text)
 
 if __name__ == '__main__':
     from aiogram import executor
