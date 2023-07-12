@@ -2,37 +2,39 @@ import os
 import tempfile
 import libtorrent as lt
 import asyncio
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, CallbackContext
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument
 
-TELEGRAM_BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
 API_ID = 12345  # Replace with your API ID
 API_HASH = 'YOUR_API_HASH'
 SESSION_STRING = 'YOUR_SESSION_STRING'
+TELEGRAM_APP_NAME = 'your_app_name'  # Replace with your app name
+TELEGRAM_API_TOKEN = 'YOUR_TELEGRAM_API_TOKEN'  # Replace with your Telegram API token
 DOWNLOAD_DIR = 'downloads'
-
-updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
-dispatcher = updater.dispatcher
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 client.start()
+
+app = Client(TELEGRAM_APP_NAME, API_ID, API_HASH, bot_token=TELEGRAM_API_TOKEN)
 
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text('Please send me a torrent file.')
+@app.on_message(filters.command("start"))
+async def start(client, message):
+    await message.reply_text("Please send me a torrent file.")
 
 
-def handle_torrent(update: Update, context: CallbackContext):
-    file_id = update.message.document.file_id
-    new_file = context.bot.get_file(file_id)
-    torrent_file_path = os.path.join(DOWNLOAD_DIR, new_file.file_path.split('/')[-1])
+@app.on_message(filters.document)
+async def handle_torrent(client, message):
+    if message.document.mime_type != "application/x-bittorrent":
+        return
 
-    new_file.download(torrent_file_path)
+    torrent_file_path = os.path.join(DOWNLOAD_DIR, message.document.file_name)
+    await message.download(file_name=torrent_file_path)
 
     ses = lt.session()
     info = lt.torrent_info(torrent_file_path)
@@ -40,46 +42,47 @@ def handle_torrent(update: Update, context: CallbackContext):
     files = info.files()
 
     keyboard = [InlineKeyboardButton(f"{i}: {file.path}", callback_data=f"{i}") for i, file in enumerate(files)]
-    reply_markup = InlineKeyboardMarkup.from_column(keyboard)
+    reply_markup = InlineKeyboardMarkup([keyboard])
 
-    update.message.reply_text("Select the files you want to download:", reply_markup=reply_markup)
+    await message.reply_text("Select the files you want to download:", reply_markup=reply_markup)
 
-    context.user_data["torrent_handle"] = h
-    context.user_data["selected_files"] = set()
+    message.__setattr__('torrent_handle', h)
+    message.__setattr__('selected_files', set())
 
 
-def handle_file_selection(update: Update, context: CallbackContext):
-    query = update.callback_query
-    file_index = int(query.data)
+@app.on_callback_query()
+async def handle_file_selection(client, callback_query):
+    file_index = int(callback_query.data)
 
-    if file_index in context.user_data["selected_files"]:
-        context.user_data["selected_files"].remove(file_index)
+    if file_index in callback_query.message.selected_files:
+        callback_query.message.selected_files.remove(file_index)
         text = "File deselected."
     else:
-        context.user_data["selected_files"].add(file_index)
+        callback_query.message.selected_files.add(file_index)
         text = "File selected."
 
-    query.answer(text=text)
+    await callback_query.answer(text=text)
 
 
-def download_selected(update: Update, context: CallbackContext):
-    selected_files = context.user_data.get("selected_files")
-    torrent_handle = context.user_data.get("torrent_handle")
+@app.on_message(filters.command("download"))
+async def download_selected(client, message):
+    selected_files = message.selected_files
+    torrent_handle = message.torrent_handle
 
     if not selected_files or not torrent_handle:
-        update.message.reply_text("No files selected.")
+        await message.reply_text("No files selected.")
         return
 
     torrent_handle.set_priority([1 if i in selected_files else 0 for i in range(torrent_handle.torrent_file().num_files())])
 
-    update.message.reply_text("Downloading files...")
+    await message.reply_text("Downloading files...")
     while not torrent_handle.is_seed():
         status = torrent_handle.status()
         progress = int(status.progress * 100)
-        update.message.reply_text(f"Download progress: {progress}%")
-        time.sleep(5)
+        await message.reply_text(f"Download progress: {progress}%")
+        await asyncio.sleep(5)
 
-    update.message.reply_text("Download complete. Uploading files...")
+    await message.reply_text("Download complete. Uploading files...")
 
     for file_index in selected_files:
         file_path = torrent_handle.torrent_file().files()[file_index].path
@@ -87,17 +90,11 @@ def download_selected(update: Update, context: CallbackContext):
 
         with open(file_path, 'rb') as file:
             if file_size > 2000000:
-                asyncio.run(client.send_file(update.message.chat.id, file))
+                await client.send_document(message.chat.id, document=file)
             else:
-                context.bot.send_document(chat_id=update.message.chat.id, document=InputFile(file))
+                await client.send_document(message.chat.id, document=InputMediaDocument(media=file))
 
-    update.message.reply_text("Upload complete.")
+    await message.reply_text("Upload complete.")
 
 
-dispatcher.add_handler(CommandHandler('start', start))
-dispatcher.add_handler(MessageHandler(Filters.document.mime_type("application/x-bittorrent"), handle_torrent))
-dispatcher.add_handler(CallbackQueryHandler(handle_file_selection))
-dispatcher.add_handler(CommandHandler('download', download_selected))
-
-updater.start_polling()
-updater.idle()
+app.run()
